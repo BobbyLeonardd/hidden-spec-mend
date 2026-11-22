@@ -68,10 +68,10 @@ type Edit = (tree: Tree) => void;
 function detect(lines: string[]): string | null {
   const first = lines.findIndex((l) => !blank(l));
   if (first < 0) return null;
-  if (lines[first]!.trim() === '*** Begin Patch') return 'v4a';
+  if (lines[first]!.trim() === MARK + 'Begin Patch') return 'v4a';
   const c = lines[first]!.trimStart()[0];
   if (c === '[' || c === '{') return 'json';
-  if (lines.some((l) => l.trimEnd() === '<<<<<<< SEARCH')) return 'search-replace';
+  if (lines.some((l) => l.trimEnd() === FIND_OPEN)) return 'search-replace';
   if (lines.some((l, i) => l.startsWith('diff --git ') || (l.startsWith('--- ') && (lines[i + 1] ?? '').startsWith('+++ ')))) return 'unified';
   return null;
 }
@@ -167,6 +167,9 @@ function jsonEdits(text: string, lines: string[]): Edit[] {
 }
 
 /* Sections 3 and 5: a file's text, and its lines matched at three levels. */
+
+/** The prefix every V4A marker line carries. */
+const MARK = '*** ';
 
 /** A file as section 3 reads it: its cells, its break and whether it ends with one. */
 interface TextFile {
@@ -545,19 +548,19 @@ interface V4Block {
   hunks: V4Hunk[];
 }
 
-/** A chunk's rows: context, old, new, blank; `*** End of File` ends it and anchors it to the end. */
+/** A chunk's rows: context, old, new, blank; an end-of-file line ends it and anchors it to the end. */
 function chunkAt(lines: string[], at: number, last: number): { piece: PatchRow[]; eof: boolean; next: number } {
   const piece: PatchRow[] = [];
   let i = at;
   let eof = false;
   while (i < last) {
     const row = lines[i]!;
-    if (row.trim() === '*** End of File') {
+    if (row.trim() === MARK + 'End of File') {
       eof = true;
       i += 1;
       break;
     }
-    if (row.startsWith('@@') || row.startsWith('*** ')) break;
+    if (row.startsWith('@@') || row.startsWith(MARK)) break;
     if (!(row === '' || row[0] === ' ' || row[0] === '-' || row[0] === '+')) break;
     piece.push(row === '' ? { kind: ' ', text: '', gap: true } : { kind: row[0]!, text: row.slice(1) });
     i += 1;
@@ -568,10 +571,10 @@ function chunkAt(lines: string[], at: number, last: number): { piece: PatchRow[]
 function parseV4A(lines: string[], strict: boolean): Edit[] {
   const first = lines.findIndex((l) => !blank(l));
   if (first < 0) throw new Exit2('error: parse 1');
-  if (lines[first]!.trim() !== '*** Begin Patch') throw new Exit2(`error: parse ${first + 1}`);
+  if (lines[first]!.trim() !== MARK + 'Begin Patch') throw new Exit2(`error: parse ${first + 1}`);
   let last = lines.length - 1;
   while (last > first && blank(lines[last]!)) last -= 1;
-  if (lines[last]!.trim() !== '*** End Patch') throw new Exit2(`error: parse ${lines.length + 1}`);
+  if (lines[last]!.trim() !== MARK + 'End Patch') throw new Exit2(`error: parse ${lines.length + 1}`);
   const secs: V4Block[] = [];
   let i = first + 1;
   while (i < last) {
@@ -580,13 +583,13 @@ function parseV4A(lines: string[], strict: boolean): Edit[] {
       i += 1;
       continue;
     }
-    if (row.startsWith('*** Add File: ')) {
-      const path = row.slice(14).trim();
+    if (row.startsWith(MARK + 'Add File: ')) {
+      const path = row.slice((MARK + 'Add File: ').length).trim();
       const kept: Array<{ t: string; gap: boolean }> = [];
       i += 1;
       while (i < last) {
         const b = lines[i]!;
-        if (b.startsWith('*** ')) break;
+        if (b.startsWith(MARK)) break;
         if (b === '') {
           kept.push({ t: '', gap: true });
           i += 1;
@@ -600,33 +603,33 @@ function parseV4A(lines: string[], strict: boolean): Edit[] {
       secs.push({ kind: 'add', path, dest: null, cells: kept.map((x) => x.t), hunks: [] });
       continue;
     }
-    if (row.startsWith('*** Delete File: ')) {
-      const path = row.slice(17).trim();
+    if (row.startsWith(MARK + 'Delete File: ')) {
+      const path = row.slice((MARK + 'Delete File: ').length).trim();
       i += 1;
       while (i < last) {
         if (blank(lines[i]!)) {
           i += 1;
           continue;
         }
-        if (lines[i]!.startsWith('*** ')) break;
+        if (lines[i]!.startsWith(MARK)) break;
         throw new Exit2(`error: parse ${i + 1}`);
       }
       secs.push({ kind: 'delete', path, dest: null, cells: [], hunks: [] });
       continue;
     }
-    if (row.startsWith('*** Update File: ')) {
-      const path = row.slice(17).trim();
+    if (row.startsWith(MARK + 'Update File: ')) {
+      const path = row.slice((MARK + 'Update File: ').length).trim();
       const start = i;
       i += 1;
       let dest: string | null = null;
-      if (i < last && lines[i]!.startsWith('*** Move to: ')) {
-        dest = lines[i]!.slice(13).trim();
+      if (i < last && lines[i]!.startsWith(MARK + 'Move to: ')) {
+        dest = lines[i]!.slice((MARK + 'Move to: ').length).trim();
         i += 1;
       }
       const hunks: V4Hunk[] = [];
       while (i < last) {
         const b = lines[i]!;
-        if (b.startsWith('*** ')) break;
+        if (b.startsWith(MARK)) break;
         if (b.startsWith('@@')) {
           const anchor = b.slice(2).trim();
           const read = chunkAt(lines, i + 1, last);
@@ -638,7 +641,7 @@ function parseV4A(lines: string[], strict: boolean): Edit[] {
           if (b === '') {
             let j = i;
             while (j < last && blank(lines[j]!)) j += 1;
-            if (j >= last || lines[j]!.startsWith('*** ')) {
+            if (j >= last || lines[j]!.startsWith(MARK)) {
               i = j;
               break;
             }
